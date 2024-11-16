@@ -9,7 +9,6 @@ import {
   WalletDropdownDisconnect,
 } from "@coinbase/onchainkit/wallet";
 import {
-  TokenRow,
   TokenSelectDropdown
 } from "@coinbase/onchainkit/token";
 import { setOnchainKitConfig } from '@coinbase/onchainkit';
@@ -40,7 +39,6 @@ const chainNames = {
   [base.id]: "Base",
   [arbitrum.id]: "Arbitrum",
 };
-
 
 const token_dict_temp = {
   'USDC': {
