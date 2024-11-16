@@ -42,6 +42,19 @@ const chainNames = {
 };
 
 
+const token_dict_temp = {
+  'USDC': {
+    [optimism.id]: '0x0b2c639c533813f4aa9d7837caf62653d097ff85', // USDC address on Optimism
+    [base.id]: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC address on Base
+    [arbitrum.id]: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831' // USDC address on Arbitrum
+  },
+  'Dai': {
+    [optimism.id]: '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1', // DAI address on Optimism
+    [base.id]: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb', // DAI address on Base
+    [arbitrum.id]: '0xda10009cbd5d07dd0cecc66161fc93d7c9000da1' // DAI address on Arbitrum
+  }
+};
+
 
 const mcDict = {
   'USDC': buildTokenMapping([
@@ -56,7 +69,8 @@ const mcDict = {
   ])
 }
 
-setOnchainKitConfig({ apiKey: 'YOUR_API_KEY' });
+
+setOnchainKitConfig({ apiKey: process.env.NEXT_PUBLIC_ONCHAINKIT_API_KEY });
 
 
 async function getMultichainBalances(connectedAccount, addLog) {
@@ -95,7 +109,7 @@ async function getMultichainBalances(connectedAccount, addLog) {
         erc20Balance.breakdown.forEach((b) => {
           const chainId = Number(b.chainId);
           const chainName = chainNames[chainId];
-          const tokenBalance = Number(b.amount) / 10 ** Number(erc20Balance.decimals);
+          const tokenBalance = Number(b.amount);
 
           if (!chainBalances[chainName]) {
             chainBalances[chainName] = [];
@@ -118,7 +132,6 @@ async function getMultichainBalances(connectedAccount, addLog) {
       });
       addLog("-----");
     }
-
     addLog("> Multichain scan completed.");
     return { nativeBalance, chainBalances };
   } catch (error) {
@@ -128,18 +141,26 @@ async function getMultichainBalances(connectedAccount, addLog) {
 }
 
 
-
 async function onchainKitSwap(connectedAccount, amount, addLog, tokenIn, tokenOut, currentChainId){
-  
   // tokenIn will be a string e.g. 'USDC'
   // utilize the mcUSDC and mcDAI token mappings
   if (tokenIn !== tokenOut.name) {
     addLog(`> Swapping ${amount} ${tokenIn} on ${chainNames[Number(currentChainId)]} to ${tokenOut.name}...`);
+    // Fetch the correct token addresses for tokenIn and tokenOut on the currentChainId
+    console.log(tokenIn)
+    console.log(tokenOut.name)
+    const fromTokenAddress = token_dict_temp[tokenIn]?.[currentChainId];
+    const toTokenAddress = token_dict_temp[tokenOut.name]?.[currentChainId];
 
+    // Check if addresses exist
+    if (!fromTokenAddress || !toTokenAddress) {
+      addLog(`> ✘ Address not found for ${tokenIn} or ${tokenOut.name} on chain ${currentChainId}`);
+      return;
+    }
     const fromToken: Token = {
       name: tokenIn,
-      address: tokenIn,
-      symbol: tokenOut,
+      address: fromTokenAddress,
+      symbol: tokenIn,
       decimals: 18,
       image: '',
       chainId: currentChainId,
@@ -147,7 +168,7 @@ async function onchainKitSwap(connectedAccount, amount, addLog, tokenIn, tokenOu
 
     const toToken: Token = {
       name: tokenOut,
-      address: tokenOut,
+      address: toTokenAddress,
       symbol: tokenOut,
       decimals: 6,
       image: '',
@@ -155,13 +176,14 @@ async function onchainKitSwap(connectedAccount, amount, addLog, tokenIn, tokenOu
     };
 
     const response = await buildSwapTransaction({
-      fromAddress: connectedAccount,
+      fromAddress: connectedAccount.address,
       from: fromToken,
       to: toToken,
-      amount: '0.1',
+      amount: `${amount}`,
       useAggregator: false,
     });
-    console.log(response);
+    console.log(`response for ${amount} ${tokenIn} ==> ${tokenOut.name} on ${chainNames[Number(currentChainId)]}`, response);
+    // only display if response is success
     addLog(`> ✔ Successfully swapped ${amount} ${tokenIn} on ${chainNames[Number(currentChainId)]} to ${tokenOut.name}.`);
     return response;
   }
@@ -198,7 +220,7 @@ async function swapMultichainTokens(connectedAccount, addLog, targetCoin, tokenB
       continue;
     }
 
-    for (const { token, balance } of tokens) {
+    for (const { token, balance, decimals } of tokens) {
       if (!balance || balance <= 0) {
         //addLog(`> Skipping ${chainName}: No ${token} balance to swap.`);
         continue;
@@ -211,6 +233,7 @@ async function swapMultichainTokens(connectedAccount, addLog, targetCoin, tokenB
         if (!chainId) throw new Error(`Chain ID for ${chainName} not found`);
 
         // Perform the swap
+        console.log(balance);
         await onchainKitSwap(
           connectedAccount,
           balance,
@@ -231,7 +254,6 @@ async function swapMultichainTokens(connectedAccount, addLog, targetCoin, tokenB
 
 
 async function bridgeMultichainTokens(connectedAccount, addLog, targetChainId, tokenBalance) {
-  console.log(targetChainId)
   // bridge the merged tokens on each chain onto the target chain, completing the merge
   addLog(`> Initiating multichain bridge to ${chainNames[Number(targetChainId.chainId)]}...`);
   addLog(`> Multichain bridging completed`);
@@ -264,7 +286,6 @@ export default function App() {
   const handleClick = async () => {
     setTerminalLogs([]);
     setIsPressed(true);
-    
     setTerminalVisible(true);
 
     try {
