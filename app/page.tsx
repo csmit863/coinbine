@@ -12,6 +12,10 @@ import {
   TokenRow,
   TokenSelectDropdown
 } from "@coinbase/onchainkit/token";
+import { setOnchainKitConfig } from '@coinbase/onchainkit';
+import { buildSwapTransaction } from '@coinbase/onchainkit/api';
+import type { Token } from '@coinbase/onchainkit/token';
+
 import {
   Address,
   Avatar,
@@ -20,36 +24,49 @@ import {
   EthBalance,
 } from "@coinbase/onchainkit/identity";
 import { useAccount } from "wagmi";
-import { arbitrum, base, optimism, scroll } from "viem/chains";
+import { arbitrum, base, optimism } from "viem/chains";
 import buttonUp from "./images/buttonup.png";
 import buttonDown from "./images/buttondown.png";
-import { computePoolAddress } from '@uniswap/v3-sdk' 
+import tree from "./svg/tree.svg";
 import { 
-  initKlaster, 
   deployment,
-  loadBiconomyV2Account as loadBicoV2Account,
   buildMultichainReadonlyClient,
   buildRpcInfo,
   buildTokenMapping
  } from "klaster-sdk";
 
- const chainNames = {
+const chainNames = {
   [optimism.id]: "Optimism",
   [base.id]: "Base",
   [arbitrum.id]: "Arbitrum",
-  [scroll.id]: "Scroll",
 };
 
-async function getMultichainBalances(connectedAccount, addLog) {
 
+
+const mcDict = {
+  'USDC': buildTokenMapping([
+    deployment(optimism.id, "0x0b2c639c533813f4aa9d7837caf62653d097ff85"),
+    deployment(base.id, "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
+    deployment(arbitrum.id, "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"),
+  ]),
+  'DAI': buildTokenMapping([
+    deployment(optimism.id, "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1"),
+    deployment(base.id, "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb"),
+    deployment(arbitrum.id, "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1"),
+  ])
+}
+
+setOnchainKitConfig({ apiKey: 'YOUR_API_KEY' });
+
+
+async function getMultichainBalances(connectedAccount, addLog) {
   try {
     addLog("> Initializing Multichain Client...");
-    // Initialize MultichainClient with multiple RPCs
+    // Initialize MultichainClient with RPCs
     const client = buildMultichainReadonlyClient([
       buildRpcInfo(optimism.id, optimism.rpcUrls.default.http[0]),
       buildRpcInfo(base.id, base.rpcUrls.default.http[0]),
       buildRpcInfo(arbitrum.id, arbitrum.rpcUrls.default.http[0]),
-      buildRpcInfo(scroll.id, scroll.rpcUrls.default.http[0]),
     ]);
 
     // Wrap connectedAccount in an object that conforms to MultichainAccount
@@ -57,37 +74,53 @@ async function getMultichainBalances(connectedAccount, addLog) {
       getAddress: () => connectedAccount?.address || "", // Return address or empty string
     };
 
+    // Fetch Native Token Balance
     addLog("> Fetching native token balances...");
     const nativeBalance = await client.getUnifiedNativeBalance({ account });
-    addLog(`Unified Native Balance: ${Number(nativeBalance) / 10**18} ETH`);
+    addLog(`Unified Native Balance: ${Number(nativeBalance) / 10 ** 18} ETH`);
 
-    addLog("> Fetching ERC-20 token balances...");
+    // Object to group balances by chain
+    const chainBalances = {};
 
-    const mcUSDC = buildTokenMapping([
-      deployment(optimism.id, "0x0b2c639c533813f4aa9d7837caf62653d097ff85"),
-      deployment(base.id, "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
-      deployment(arbitrum.id, "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"),
-    ])
+    // Iterate through mcDict to fetch ERC-20 balances
+    for (const [tokenName, tokenMapping] of Object.entries(mcDict)) {
+      addLog(`> Fetching balances for ${tokenName}...`);
+      try {
+        const erc20Balance = await client.getUnifiedErc20Balance({
+          tokenMapping,
+          account,
+        });
 
-    const mcDAI = buildTokenMapping([
-      deployment(optimism.id, "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1"),
-      deployment(base.id, "0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb"),
-      deployment(arbitrum.id, "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1"),
-    ])
+        // Process breakdown by chain
+        erc20Balance.breakdown.forEach((b) => {
+          const chainId = Number(b.chainId);
+          const chainName = chainNames[chainId];
+          const tokenBalance = Number(b.amount) / 10 ** Number(erc20Balance.decimals);
 
-    const erc20Balance = await client.getUnifiedErc20Balance({
-      tokenMapping: mcUSDC,
-      account: account,
-    });
+          if (!chainBalances[chainName]) {
+            chainBalances[chainName] = [];
+          }
 
-    addLog(`Unified ERC-20 Balance: ${Number(erc20Balance.balance)/10**Number(erc20Balance.decimals)}`);
-    erc20Balance.breakdown.forEach((b) => {
-      addLog(`=== ${chainNames[Number(b.chainId)]} ===`);
-      addLog(`USDC Balance: ${Number(b.amount) / 10**Number(erc20Balance.decimals)} `);
-      addLog('-----')
-    });
+          // Add token balance to the chain
+          chainBalances[chainName].push({ token: tokenName, balance: tokenBalance });
+        });
+      } catch (error) {
+        addLog(`> Error fetching balances for ${tokenName}: ${error.message}`);
+      }
+    }
 
-    return { nativeBalance, erc20Balance };
+    // Log grouped balances by chain
+    addLog("> Displaying all balances grouped by chain...");
+    for (const [chainName, tokens] of Object.entries(chainBalances)) {
+      addLog(`=== ${chainName} ===`);
+      tokens.forEach(({ token, balance }) => {
+        addLog(`${token}: ${balance}`);
+      });
+      addLog("-----");
+    }
+
+    addLog("> Multichain scan completed.");
+    return { nativeBalance, chainBalances };
   } catch (error) {
     addLog(`> Error fetching balances: ${error.message}`);
     throw error;
@@ -96,28 +129,112 @@ async function getMultichainBalances(connectedAccount, addLog) {
 
 
 
+async function onchainKitSwap(connectedAccount, amount, addLog, tokenIn, tokenOut, currentChainId){
+  
+  // tokenIn will be a string e.g. 'USDC'
+  // utilize the mcUSDC and mcDAI token mappings
+  if (tokenIn !== tokenOut.name) {
+    addLog(`> Swapping ${amount} ${tokenIn} on ${chainNames[Number(currentChainId)]} to ${tokenOut.name}...`);
 
+    const fromToken: Token = {
+      name: tokenIn,
+      address: tokenIn,
+      symbol: tokenOut,
+      decimals: 18,
+      image: '',
+      chainId: currentChainId,
+    };
 
-async function dexSwap(connectedAccount, tokenA, tokenB){
-  const currentPoolAddress = computePoolAddress({
-    factoryAddress: POOL_FACTORY_CONTRACT_ADDRESS,
-    tokenA: CurrentConfig.tokens.in,
-    tokenB: CurrentConfig.tokens.out,
-    fee: CurrentConfig.tokens.poolFee,
-  })
+    const toToken: Token = {
+      name: tokenOut,
+      address: tokenOut,
+      symbol: tokenOut,
+      decimals: 6,
+      image: '',
+      chainId: currentChainId,
+    };
+
+    const response = await buildSwapTransaction({
+      fromAddress: connectedAccount,
+      from: fromToken,
+      to: toToken,
+      amount: '0.1',
+      useAggregator: false,
+    });
+    console.log(response);
+    addLog(`> ✔ Successfully swapped ${amount} ${tokenIn} on ${chainNames[Number(currentChainId)]} to ${tokenOut.name}.`);
+    return response;
+  }
+
 }
 
-async function swapMultichainTokens(connectedAccount, addLog, targetCoin, tokenBalance) { 
-  console.log(targetCoin)
-  // exchange each token on each chain into the target coin using the multichain token mappings
+
+async function swapMultichainTokens(connectedAccount, addLog, targetCoin, tokenBalances) {
   addLog(`> Initiating multichain swap to ${targetCoin.name}...`);
 
+  // Handle native token balance
+  /*if (tokenBalances.nativeBalance > 0) {
+    const nativeBalanceInEth = Number(tokenBalances.nativeBalance) / 10 ** 18;
+    addLog(`> Swapping ${nativeBalanceInEth} ETH to ${targetCoin.name}...`);
+    try {
+      await onchainKitSwap(
+        connectedAccount,
+        nativeBalanceInEth,
+        addLog,
+        "ETH",
+        targetCoin,
+        null // Null for native tokens
+      );
+      addLog(`> ✔ Successfully swapped ${nativeBalanceInEth} ETH to ${targetCoin.name}.`);
+    } catch (error) {
+      addLog(`> ✘ Failed to swap ETH: ${error.message}`);
+    }
+  }*/
+
+  // Handle ERC-20 token balances on each chain
+  for (const [chainName, tokens] of Object.entries(tokenBalances.chainBalances)) {
+    if (!Array.isArray(tokens)) {
+      //addLog(`> Skipping ${chainName}: Invalid token balances structure.`);
+      continue;
+    }
+
+    for (const { token, balance } of tokens) {
+      if (!balance || balance <= 0) {
+        //addLog(`> Skipping ${chainName}: No ${token} balance to swap.`);
+        continue;
+      }
+
+
+      try {
+        // Map chainName to chainId
+        const chainId = Object.keys(chainNames).find((id) => chainNames[id] === chainName);
+        if (!chainId) throw new Error(`Chain ID for ${chainName} not found`);
+
+        // Perform the swap
+        await onchainKitSwap(
+          connectedAccount,
+          balance,
+          addLog,
+          token,
+          targetCoin,
+          Number(chainId) // Convert chainId to number
+        );
+
+      } catch (error) {
+        addLog(`> ✘ Failed to swap ${token} on ${chainName}: ${error.message}`);
+      }
+    }
+  }
+
+  addLog("> Multichain swap completed.");
 }
+
 
 async function bridgeMultichainTokens(connectedAccount, addLog, targetChainId, tokenBalance) {
   console.log(targetChainId)
   // bridge the merged tokens on each chain onto the target chain, completing the merge
   addLog(`> Initiating multichain bridge to ${chainNames[Number(targetChainId.chainId)]}...`);
+  addLog(`> Multichain bridging completed`);
 
 }
 
@@ -155,12 +272,9 @@ export default function App() {
         addLog("> Starting coin merge...");
         const balance = await getMultichainBalances(connectedAccount, addLog);
         
-        addLog(`> Multichain scan completed.`);
         const newBalance = await swapMultichainTokens(connectedAccount, addLog, targetCoin, balance);
-        addLog(`> Multichain swaps completed.`);
 
         const finalBalance = await bridgeMultichainTokens(connectedAccount, addLog, targetChain, newBalance);
-        addLog(`> Multichain bridging completed`);
 
       } else {
         addLog("> No wallet connected. Please connect wallet to use coin merge.");
@@ -310,8 +424,8 @@ export default function App() {
             )}
           </div>
           {/* Bottom-left text */}
-          <div className="absolute bottom-4 centre-4 text-sm text-gray-500">
-            <p>WIP</p>
+          <div className="absolute bottom-4 left-4 text-sm text-gray-500">
+            <p>WIP</p>              
             <p>built with Onchain Kit & Klaster at ETHGlobal Bangkok 2024</p>
             <a
               href="https://github.com/csmit863/coinmerge-ethglobal2024"
@@ -321,6 +435,9 @@ export default function App() {
             >
               https://github.com/csmit863/coinmerge-ethglobal2024
             </a>
+          </div>
+          <div className="absolute top-4 left-4 text-sm text-gray-500">
+            <Image src={tree} alt='tree-diagram' width={50} height={50}/>
           </div>
         </div>
       </main>
