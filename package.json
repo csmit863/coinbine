@@ -11,6 +11,7 @@
   "dependencies": {
     "@coinbase/onchainkit": "latest",
     "@tanstack/react-query": "^5",
+    "@uniswap/v3-sdk": "^3.18.1",
     "klaster-sdk": "^0.5.14",
     "next": "14.2.15",
     "react": "^18",
